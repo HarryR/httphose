@@ -1,0 +1,139 @@
+README.md
+LICENSE
+DEV
+history.txt
+license.txt
+CHANGELOG.md
+README.md
+readme.txt
+readme.html
+CONTRIBUTING.md
+humans.txt
+robots.txt
+.DS_Store
+crossdomain.xml
+favicon.ico
+files.txt
+
+# Source control artefacts
+.git/config
+.gitmodules
+.gitattributes
+.gitignore
+.svn/entries
+.hg/store/00manifest.i
+.bzr/README
+
+# Third party SAAS
+.tx/config
+.travis.yml
+.scrutinizer.yml
+codeception.yml
+appveyor.yml
+circle.yml
+.codeclimate.yml
+app.json
+.drone.yml
+
+
+# Ruby
+Gemfile
+Gemfile.lock
+Rakefile
+config/database.yml
+config/secrets.yml
+
+# General automation
+Makefile
+Vagrantfile
+Dockerfile
+
+
+# PHP
+phpunit.xml
+composer.json
+composer.lock
+.php_cs
+phpinfo.php
+
+
+# Generic PHP config files
+############################
+# configuration.php~
+# configuration.php.save
+# .configuration.php.swp
+# .configuration.php.swo
+# configuration.php.bak
+# configuration.php.old
+# config.php~
+# config.php.save
+# .config.php.swp
+# .config.php.swo
+# config.php.bak
+# config.php.old
+# wp-config.php~
+# wp-config.php.save
+# .wp-config.php.swp
+# .wp-config.php.swo
+# wp-config.php.bak
+# wp-config.php.old
+############################
+
+
+# NPM / JavaScript
+webpack.config.builder.js
+webpack.config.js
+jsconfig.json
+.flowconfig
+manifest.json
+npm-shrinkwrap.json
+gulpfile.js
+gruntfile.js
+bower.json
+package.json
+browserconfig.xml
+rev-manifest.json
+
+# Netbeans
+nbproject/project.xml
+nbproject/project.properties
+
+# IntelliJ
+.idea/workspace.xml
+.idea/dataSources.xml
+.idea/sqlDataSources.xml
+.idea/vcs.xml
+.idea/mongoSettings.xml
+.idea/dataSources.ids
+.entries
+idea.iml
+
+# Eclipse
+.settings/org.eclipse.core.resources.prefs
+build/plugin.xml
+.project
+
+# Java
+pom.xml
+WEB-INF/web.xml
+.springBeans
+project.xml
+build.xml
+
+# python
+requirements.txt
+setup.py
+tox.ini
+setup.cfg
+
+# Home directory...
+.vagrant.d/insecure_private_key
+.gitconfig
+.bash_history
+.bashrc
+.profile
+.ssh/authorized_keys
+.mysql_history
+.sqlite_history
+.php_history
+
