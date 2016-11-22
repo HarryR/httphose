@@ -8,19 +8,18 @@ from . import HTTPHose
 
 
 class writable_dir(argparse.Action):
-    def __call__(self,parser, namespace, values, option_string=None):
-        prospective_dir=values
-        if not os.path.isdir(prospective_dir):
-            raise argparse.ArgumentTypeError("{0} is not a valid path".format(prospective_dir))
-        if os.access(prospective_dir, os.W_OK):
-            prospective_dir = os.path.realpath(prospective_dir)
-            setattr(namespace, self.dest, prospective_dir)
+    def __call__(self, parser, namespace, values, option_string=None):
+        if not os.path.isdir(values):
+            raise argparse.ArgumentTypeError("{0} is not a valid path".format(values))
+        if os.access(values, os.W_OK):
+            values = os.path.realpath(values)
+            setattr(namespace, self.dest, values)
         else:
-            raise argparse.ArgumentTypeError("{0} is not a readable dir".format(prospective_dir))
+            raise argparse.ArgumentTypeError("{0} is not a writable dir".format(values))
 
 
 def main():
-    parser = argparse.ArgumentParser(description='HTTP server reflector')
+    parser = argparse.ArgumentParser(description='HTTP server file query tool')
     parser.add_argument('-p', '--progress', action='store_true',
                         help='Show progress bar with ETA')
     parser.add_argument('-q', '--quiet', action='store_true',
@@ -31,7 +30,7 @@ def main():
     parser.add_argument('--debug', action='store_const', dest="loglevel",
                         const=logging.DEBUG, default=logging.WARNING,
                         help="Log debugging messages")
-    parser.add_argument('-j', '--json', metavar='OUTJSON',
+    parser.add_argument('-o', '--output', metavar='OUTJSON',
                         type=argparse.FileType('w+'),
                         help="Output results, as JSON to file")
     parser.add_argument('-n', '--names', metavar='NAMES_FILE',
@@ -40,7 +39,10 @@ def main():
                         help="Load target directory names from file")
     parser.add_argument('-b', '--beanstalk', metavar='HOST:PORT',
                         help="Connect to Beanstalk server for jobs")
-    # TODO: beanstalk pipes for requests & responses
+    parser.add_argument('--tube-fetch', metavar='NAME', default='httphose_jobs',
+                        help='Beanstalk tube to fetch jobs from, default: httphose_jobs')
+    parser.add_argument('--tube-resp', metavar='NAME', default='httphose_resp',
+                        help='Beanstalk tube to respond to, default: httphose_resp')
     parser.add_argument('-x', '--extra', metavar='K=V', action='append',
                         help="Extra variables for JSON output")
     parser.add_argument('-d', '--domains', metavar='DOMAINS_FILE',
@@ -48,8 +50,9 @@ def main():
                         help="Load target domains from file")
     parser.add_argument('-s', '--storage', metavar='DIRECTORY',
                         action=writable_dir, help="Save files into this dir")
-    parser.add_argument('-A', '--agent', default="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_7_2) AppleWebKit/535.2 (KHTML, like Gecko) Chrome/15.0.874.106 Safari/535.2",
-                        help="HTTP User Agent")
+    parser.add_argument('--redirects', default=4, type=int, metavar='N',
+                        help="Maximum number of HTTP Location redirects, default: 4")
+    parser.add_argument('-A', '--agent', help="HTTP User Agent, default: random common user-agent")
     parser.add_argument('-R', '--retries', default=2, type=int, metavar='N',
                         help="Retries on failed DNS request, default: 2")
     parser.add_argument('-C', '--concurrency', default=20, type=int,

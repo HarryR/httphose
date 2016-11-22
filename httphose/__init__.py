@@ -17,7 +17,28 @@ from base64 import b32encode
 LOG = logging.getLogger(__name__)
 
 
+# https://techblog.willshouse.com/2012/01/03/most-common-user-agents/
+HTTP_USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; WOW64; rv:49.0) Gecko/20100101 Firefox/49.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_1) AppleWebKit/602.2.14 (KHTML, like Gecko) Version/10.0.1 Safari/602.2.14",
+    "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:49.0) Gecko/20100101 Firefox/49.0",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
+    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:49.0) Gecko/20100101 Firefox/49.0",
+    "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.143 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
+    "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko",
+]
+
+
 def sha1_b32(*args):
+    """Hash all arguments in a way which avoids concatenation resulting in same hash"""
     hasher = sha1()
     for arg in args:
         hasher.update(str(arg))
@@ -34,56 +55,98 @@ class Worker(object):
         self.names = names
 
     def run(self):
-        session = requests.Session()
-        domain = self.domain
+        options = self.hose.options
         url = self.domain.strip('/')
         if not url.startswith('http://') and not url.startswith('https://'):
             url = 'http://' + url
         headers = {
-            'User-Agent': self.hose.options.agent,
+            'User-Agent': options.agent or random.choice(HTTP_USER_AGENTS)
         }
-        for name in self.names:
-            name_url = url + '/' + name            
-            resp = session.get(name_url, headers=headers, stream=True)
-            if resp.status_code >= 200 and resp.status_code < 400:
-                if name in resp.url:
-                    self.hose.on_result(name_url, resp)
-            self.hose.on_finish()
+        with requests.Session() as session:
+            for name in self.names:
+                try:
+                    name_url = url + '/' + name
+                    resp = session.get(name_url, headers=headers, stream=True,
+                                       timeout=options.timeout, verify=False,
+                                       max_redirects=options.redirects)
+                    if resp.status_code >= 200 and resp.status_code < 300:
+                        if name in resp.url:
+                            self.hose.on_result(name_url, resp)
+                except Exception:
+                    LOG.exception("Failed to request %r", name_url)
+        self.hose.on_finish()
 
 
-class BeanstalkWorkGenerator(object):
-    __slots__ = ('hose', 'names', 'beanstalk', 'total')
+def _connect_beanstalk(self, options):
+    import beanstalkc
+    host = options.beanstalk
+    if ':' not in host:
+        host += ':14711'
+    host, port = host.split(':')
+    return beanstalkc.Connection(host=host, port=port)
 
-    def _connect_beanstalk(self, options):
-        # TODO: hose for put, error and results
-        import beanstalkc
-        host = options.beanstalk
-        if ':' not in host:
-            host += ':14711'
-        host, port = host.split(':')
-        return beanstalkc.Connection(host=host, port=port)
 
-    def __init__(self, hose):
+class BeanstalkChannel(object):
+    __slots__ = ('beanstalk',)
+
+    def __init__(self, options):
+        if not options.beanstalk:
+            raise RuntimeError("Not enough info to create beanstalk channel!")
+        self.beanstalk = _connect_beanstalk(options)
+        self.beanstalk.use(options.tube_resp)
+        self.beanstalk.watch(options.tube_fetch)
+
+    def reserve(self):
+        while True:
+            job = self.beanstalk.reserve()
+            try:
+                data = json.loads(job.body)
+                if not isinstance(data, (list, set, dict)):
+                    LOG.warning('Invalid job JSON, bad type!')
+                    job.bury()
+                    continue
+                if isinstance(data, dict):
+                    # {'domains':[...], 'extra':{?}}
+                    if 'domains' not in data:
+                        LOG.warning('Invalid job dict, no domains!')
+                        job.bury()
+                        continue
+                    domain_list = data['domains']
+                    extra = data.get('extra')
+                    if not isinstance(domain_list, (list, set)) or not isinstance(extra, dict):
+                        LOG.warning('Invalid job dict, bad type for domains or extra!')
+                        job.bury()
+                        continue
+                    return job, domain_list, extra
+                else:
+                    # Simple list of domains
+                    return job, data, None
+            except ValueError:
+                LOG.exception('Error parsing job JSON')
+                job.bury()
+                continue
+
+
+class ChannelWorkGenerator(object):
+    __slots__ = ('hose', 'names', 'channel', 'total')
+
+    def __init__(self, hose, channel):
         self.hose = hose
         self.names = self.hose.names
-        self.beanstalk = self._connect_beanstalk(hose.options)
+        self.channel = channel
         self.total = None
 
     def all(self):
         """Fetch batches of jobs from beanstalk"""
         while True:
-            job = self.beanstalk.reserve()
-            fail = False
+            job, domain_list, extra = self.channel.reserve()
             try:
-                domain_list = json.loads(job.body)
-                if not isinstance(domain_list, (list, set)):
-                    fail = True
-            except ValueError:
-                domain_list = [job.body]
-            if not fail:
                 for domain in domain_list:
                     yield Worker(self.hose, domain, self.names)
-            job.delete()            
+            except Exception:
+                job.bury()
+                return
+            job.delete()
 
 
 class WorkGenerator(object):
@@ -102,12 +165,32 @@ class WorkGenerator(object):
 
 class HTTPHose(object):
     def __init__(self, options):
+        self._setup_options(options)
+        self._setup_progress(options)
+        self._setup_beanstalk(options)
+        if not self.channel:
+            LOG.info("%d file names, %d domains", len(self.names), len(self.domains))
+        else:
+            LOG.info("%d file names, attached to C&C channel", len(self.names))
+
+    def valid(self):
+        return len(self.domains) or self.channel
+
+    def _setup_options(self, options):
         self.options = options
         self.domains = options.domain
         if options.domains:
             self.domains += filter(None, options.domains.read().split("\n"))
         random.shuffle(self.domains)
         self.names = [X for X in self._load_names(options.names)]
+
+    def _setup_beanstalk(self, options):
+        if options.beanstalk is None:
+            self.channel = None
+            return
+        self.channel = BeanstalkChannel(options)
+
+    def _setup_progress(self, options):
         if options.progress:
             self.progress = progressbar.ProgressBar(
                 redirect_stdout=True,
@@ -120,8 +203,6 @@ class HTTPHose(object):
         else:
             self.progress = None
         self.finished = 0
-        LOG.info("%d directories, %d domains",
-                 len(self.names), len(self.domains))
 
     def _load_names(self, names_file):
         for name in names_file:
@@ -130,7 +211,7 @@ class HTTPHose(object):
                 continue
             yield name
 
-    def on_result(self, url, resp):
+    def on_result(self, url, resp, extra=None):
         status = dict(
             url=resp.url or url,
             hist=[(hist.status_code, hist.url) for hist in resp.history],
@@ -144,6 +225,8 @@ class HTTPHose(object):
                 sv=resp.headers.get('Server'),
             ).iteritems() if v}
         )
+        if extra and isinstance(extra, dict):
+            status.update(extra)
         # Save file to storage
         storage = self.options.storage
         if storage:
@@ -159,7 +242,16 @@ class HTTPHose(object):
                 for chunk in resp.iter_content(chunk_size=1024*64):
                     handle.write(chunk)
             status['id'] = url_hash
-        print(status)
+        self._log_result(status)
+
+    def _log_result(self, status):
+        if self.options.extra:
+            status.update(self.options.extra)
+        json_status = json.dumps(status)
+        if not self.options.quiet:
+            print(json_status)
+        if self.options.output:
+            self.options.output.write(json_status + "\n")
 
     def on_finish(self):
         if self.progress:
@@ -168,9 +260,6 @@ class HTTPHose(object):
             except Exception:
                 self.progress.update(progressbar.UnknownLength)
         self.finished += 1
-
-    def valid(self):
-        return len(self.domains) > 0 or self.options.beanstalk is not None
 
     def run(self):
         generator = WorkGenerator(self)
@@ -186,4 +275,3 @@ class HTTPHose(object):
         pool.join()
         if self.progress:
             self.progress.finish()
-
