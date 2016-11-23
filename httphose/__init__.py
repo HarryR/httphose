@@ -62,18 +62,18 @@ class Worker(object):
         headers = {
             'User-Agent': options.agent or random.choice(HTTP_USER_AGENTS)
         }
-        with requests.Session() as session:
-            for name in self.names:
-                try:
-                    name_url = url + '/' + name
-                    resp = session.get(name_url, headers=headers, stream=True,
-                                       timeout=options.timeout, verify=False,
-                                       max_redirects=options.redirects)
-                    if resp.status_code >= 200 and resp.status_code < 300:
-                        if name in resp.url:
-                            self.hose.on_result(name_url, resp)
-                except Exception:
-                    LOG.exception("Failed to request %r", name_url)
+        session = requests.Session()
+        session.max_redirects = options.redirects
+        for name in self.names:
+            try:
+                name_url = url + '/' + name
+                resp = session.get(name_url, headers=headers, stream=True,
+                                   timeout=options.timeout, verify=False)
+                if resp.status_code >= 200 and resp.status_code < 300:
+                    if name in resp.url:
+                        self.hose.on_result(name_url, resp)
+            except Exception:
+                LOG.exception("Failed to request %r", name_url)
         self.hose.on_finish()
 
 
@@ -96,31 +96,36 @@ class BeanstalkChannel(object):
         self.beanstalk.use(options.tube_resp)
         self.beanstalk.watch(options.tube_fetch)
 
+    def put(self, data):
+        return self.beanstalk.put(json.dumps(data))
+
     def reserve(self):
         while True:
             job = self.beanstalk.reserve()
             try:
-                data = json.loads(job.body)
-                if not isinstance(data, (list, set, dict)):
-                    LOG.warning('Invalid job JSON, bad type!')
-                    job.bury()
-                    continue
-                if isinstance(data, dict):
-                    # {'domains':[...], 'extra':{?}}
-                    if 'domains' not in data:
-                        LOG.warning('Invalid job dict, no domains!')
+                # One or more rows can exist in the job
+                for data in job.body.split("\n"):
+                    data = json.loads(job.body)
+                    if not isinstance(data, (list, set, dict)):
+                        LOG.warning('Invalid job JSON, bad type!')
                         job.bury()
                         continue
-                    domain_list = data['domains']
-                    extra = data.get('extra')
-                    if not isinstance(domain_list, (list, set)) or not isinstance(extra, dict):
-                        LOG.warning('Invalid job dict, bad type for domains or extra!')
-                        job.bury()
-                        continue
-                    return job, domain_list, extra
-                else:
-                    # Simple list of domains
-                    return job, data, None
+                    if isinstance(data, dict):
+                        # {'domains':[...], 'extra':{?}}
+                        if 'domains' not in data:
+                            LOG.warning('Invalid job dict, no domains!')
+                            job.bury()
+                            continue
+                        domain_list = data['domains']
+                        extra = data.get('extra')
+                        if not isinstance(domain_list, (list, set)) or not isinstance(extra, dict):
+                            LOG.warning('Invalid job dict, bad type for domains or extra!')
+                            job.bury()
+                            continue
+                        yield job, domain_list, extra
+                    else:
+                        # Simple list of domains
+                        yield job, data, None
             except ValueError:
                 LOG.exception('Error parsing job JSON')
                 job.bury()
