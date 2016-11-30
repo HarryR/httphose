@@ -13,6 +13,9 @@ import requests
 import progressbar
 from hashlib import sha1
 from base64 import b32encode
+from requests.packages.urllib3.exceptions import InsecureRequestWarning
+
+requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 
 LOG = logging.getLogger(__name__)
 

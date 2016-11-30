@@ -4,7 +4,7 @@ DOCKERTAG ?= harryr/httphose
 all:
 
 docker-run: docker-build
-	docker run -ti $(DOCKERTAG)
+	docker run -ti --rm $(DOCKERTAG)
 
 docker-build:
 	docker build -t $(DOCKERTAG) .

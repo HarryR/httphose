@@ -31,7 +31,7 @@ def main():
                         const=logging.DEBUG, default=logging.WARNING,
                         help="Log debugging messages")
     parser.add_argument('-o', '--output', metavar='OUTJSON',
-                        type=argparse.FileType('w+'),
+                        type=argparse.FileType('a'),
                         help="Output results, as JSON to file")
     parser.add_argument('-n', '--names', metavar='NAMES_FILE',
                         default=pkg_resources.resource_stream(__name__, "common.txt"),
