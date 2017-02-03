@@ -2,8 +2,8 @@ from __future__ import absolute_import, print_function
 import sys
 import argparse
 import logging
-import pkg_resources
 import os
+import pkg_resources
 from . import HTTPHose
 
 
@@ -19,7 +19,7 @@ class writable_dir(argparse.Action):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='HTTP server file query tool')
+    parser = argparse.ArgumentParser(description='Bulk HTTP file enumerator, spaffer of requests and collector of info')
     parser.add_argument('-p', '--progress', action='store_true',
                         help='Show progress bar with ETA')
     parser.add_argument('-q', '--quiet', action='store_true',
@@ -30,6 +30,8 @@ def main():
     parser.add_argument('--debug', action='store_const', dest="loglevel",
                         const=logging.DEBUG, default=logging.WARNING,
                         help="Log debugging messages")
+    parser.add_argument('-e', '--exclude', metavar='TEXT',
+                        help='When result text contains this string, ignore like 404')
     parser.add_argument('-o', '--output', metavar='OUTJSON',
                         type=argparse.FileType('a'),
                         help="Output results, as JSON to file")

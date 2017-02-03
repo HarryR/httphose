@@ -1,5 +1,6 @@
 gevent
-dnspython
 requests
+requests[socks]
 progressbar2
 beanstalkc
+PyYAML

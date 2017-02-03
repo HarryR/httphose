@@ -121,6 +121,11 @@ project.xml
 build.xml
 
 # python
+config.py
+config.pyc
+settings.py
+settings.pyc
+settings_local.py
 requirements.txt
 setup.py
 tox.ini

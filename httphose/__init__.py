@@ -4,6 +4,7 @@ from gevent import monkey
 monkey.patch_all()
 import gevent
 import gevent.pool
+from gevent.lock import Semaphore
 
 import os
 import logging
@@ -20,23 +21,23 @@ requests.packages.urllib3.disable_warnings(InsecureRequestWarning)
 LOG = logging.getLogger(__name__)
 
 
-# https://techblog.willshouse.com/2012/01/03/most-common-user-agents/
+# https://myip.ms/browse/comp_browseragents/Computer_Browser_Agents.html
 HTTP_USER_AGENTS = [
-    "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; WOW64; rv:49.0) Gecko/20100101 Firefox/49.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_1) AppleWebKit/602.2.14 (KHTML, like Gecko) Version/10.0.1 Safari/602.2.14",
-    "Mozilla/5.0 (Windows NT 6.1; WOW64; rv:49.0) Gecko/20100101 Firefox/49.0",
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_12_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
-    "Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:49.0) Gecko/20100101 Firefox/49.0",
-    "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/53.0.2785.143 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 6.1; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.71 Safari/537.36",
-    "Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko",
+"Mozilla/5.0 (Windows NT 6.1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/41.0.2228.0 Safari/537.36",
+"Opera/9.80 (Windows NT 6.2; Win64; x64) Presto/2.12 Version/12.16",
+"Mozilla/5.0 (Windows NT 6.1; WOW64; Trident/7.0; rv:11.0) like Gecko",
+"Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; Trident/5.0)",
+"Mozilla/5.0 (compatible; MSIE 9.0; Windows NT 6.1; WOW64; Trident/5.0)",
+"Mozilla/5.0 (Windows NT 6.3; WOW64; rv:45.0) Gecko/20100101 Firefox/45.0",
+"Mozilla/5.0 (compatible; MSIE 10.0; Windows NT 6.1; WOW64; Trident/6.0)",
+"Mozilla/5.0 (Windows NT 6.1; Trident/7.0; rv:11.0) like Gecko",
+"Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 6.1; WOW64; Trident/5.0; SLCC2; .NET CLR 2.0.50727; .NET CLR 3.5.30729; .NET CLR 3.0.30729; Media Center PC 6.0; .NET4.0C; .NET4.0E)",
+"Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.11 (KHTML like Gecko) Chrome/23.0.1271.95 Safari/537.11    ",
+"Mozilla/5.0 (Macintosh; Intel Mac OS X 1094) AppleWebKit/537.77.4 (KHTML like Gecko) Version/7.0.5 Safari/537.77.4",
+"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_11_2) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/48.0.2564.48 Safari/537.36",
+"Mozilla/5.0 (Windows NT 5.1) AppleWebKit/537.11 (KHTML like Gecko) Chrome/23.0.1271.64 Safari/537.11",
+"Mozilla/5.0 (Windows NT 5.1; rv:31.0) Gecko/20100101 Firefox/31.0",
+"Mozilla/5.0 (Windows NT 6.3; WOW64; Trident/7.0; rv:11.0) like Gecko"
 ]
 
 
@@ -50,12 +51,13 @@ def sha1_b32(*args):
 
 
 class Worker(object):
-    __slots__ = ('hose', 'domain', 'names')
+    __slots__ = ('hose', 'domain', 'names', 'extra')
 
-    def __init__(self, hose, domain, names):
+    def __init__(self, hose, domain, names, extra=None):
         self.hose = hose
         self.domain = domain
         self.names = names
+        self.extra = extra
 
     def run(self):
         options = self.hose.options
@@ -74,65 +76,97 @@ class Worker(object):
                                    timeout=options.timeout, verify=False)
                 if resp.status_code >= 200 and resp.status_code < 300:
                     if name in resp.url:
-                        self.hose.on_result(name_url, resp)
+                        self.hose.on_result(name_url, resp, self.extra)
             except Exception:
                 LOG.exception("Failed to request %r", name_url)
         self.hose.on_finish()
 
 
-def _connect_beanstalk(self, options):
+def _connect_beanstalk(host):
     import beanstalkc
-    host = options.beanstalk
     if ':' not in host:
-        host += ':14711'
+        host += ':11300'
     host, port = host.split(':')
-    return beanstalkc.Connection(host=host, port=port)
+    try:
+        return beanstalkc.Connection(host=host, port=port)
+    except beanstalkc.SocketError:
+        LOG.exception("Cannot connect to Beanstalk server @ %r:%r", host, port)
+        raise
 
 
 class BeanstalkChannel(object):
-    __slots__ = ('beanstalk',)
+    __slots__ = ('beanstalk', 'lock')
 
     def __init__(self, options):
         if not options.beanstalk:
             raise RuntimeError("Not enough info to create beanstalk channel!")
-        self.beanstalk = _connect_beanstalk(options)
+        self.beanstalk = _connect_beanstalk(options.beanstalk)
         self.beanstalk.use(options.tube_resp)
         self.beanstalk.watch(options.tube_fetch)
+        self.lock = Semaphore()
+        LOG.info("Connected to beanstalk @ %r - fetch: %r - resp: %r",
+                 options.beanstalk, options.tube_fetch, options.tube_resp)
+
+    def get_workgenerator(self, hose):
+        return ChannelWorkGenerator(hose, self)
 
     def put(self, data):
-        return self.beanstalk.put(json.dumps(data))
+        with self.lock:
+            return self.beanstalk.put(data)
 
-    def reserve(self):
+    def bury(self, job):
+        with self.lock:
+            job.bury()
+
+    def delete(self, job):
+        with self.lock:
+            job.delete()
+
+    def get(self):
         while True:
-            job = self.beanstalk.reserve()
+            with self.lock:
+                job = self.beanstalk.reserve()
             try:
                 # One or more rows can exist in the job
                 for data in job.body.split("\n"):
                     data = json.loads(job.body)
                     if not isinstance(data, (list, set, dict)):
-                        LOG.warning('Invalid job JSON, bad type!')
-                        job.bury()
+                        LOG.warning('Job %r: Invalid JSON, bad type: %r',
+                                    job.jid, type(data))
+                        self.bury(job)
                         continue
                     if isinstance(data, dict):
                         # {'domains':[...], 'extra':{?}}
                         if 'domains' not in data:
                             LOG.warning('Invalid job dict, no domains!')
-                            job.bury()
+                            self.bury(job)
                             continue
                         domain_list = data['domains']
                         extra = data.get('extra')
-                        if not isinstance(domain_list, (list, set)) or not isinstance(extra, dict):
-                            LOG.warning('Invalid job dict, bad type for domains or extra!')
-                            job.bury()
+                        if not isinstance(domain_list, (list, set)):
+                            LOG.warning('Job %r: job dict, bad type for domains: %r',
+                                        job.jid, type(domain_list))
+                            self.bury(job)
                             continue
-                        yield job, domain_list, extra
+                        if extra and not isinstance(extra, (dict)):
+                            LOG.warning('Job %r: invalid job dict! bad type for extra: %r',
+                                        job.jid, type(extra))
+                            self.bury(job)
+                            continue
+                        return job, domain_list, extra
                     else:
                         # Simple list of domains
-                        yield job, data, None
+                        return job, data, None
             except ValueError:
-                LOG.exception('Error parsing job JSON')
-                job.bury()
+                LOG.exception('Job %r: error parsing job JSON', job.jid)
+                self.bury(job)
+
+    def getall(self):
+        while True:
+            job, data, extra = self.get()
+            if not job:
                 continue
+            yield job, data, extra
 
 
 class ChannelWorkGenerator(object):
@@ -144,20 +178,21 @@ class ChannelWorkGenerator(object):
         self.channel = channel
         self.total = None
 
-    def all(self):
+    def getall(self):
         """Fetch batches of jobs from beanstalk"""
-        while True:
-            job, domain_list, extra = self.channel.reserve()
+        for job, domain_list, extra in self.channel.getall():
+            LOG.info("Processing job: %r", job.jid)
             try:
                 for domain in domain_list:
-                    yield Worker(self.hose, domain, self.names)
+                    yield Worker(self.hose, domain, self.names, extra)
             except Exception:
-                job.bury()
-                return
-            job.delete()
+                LOG.exception("While generating work from job %r", job.jid)
+                self.channel.bury(job)
+                continue
+            self.channel.delete(job)
 
 
-class WorkGenerator(object):
+class ListWorkGenerator(object):
     __slots__ = ('hose', 'domains', 'names', 'total')
 
     def __init__(self, hose):
@@ -166,23 +201,27 @@ class WorkGenerator(object):
         self.names = self.hose.names
         self.total = len(self.domains) * len(self.names)
 
-    def all(self):
+    def getall(self):
         for domain in self.domains:
             yield Worker(self.hose, domain, self.names)
 
 
 class HTTPHose(object):
+    __slots__ = ('options', 'domains', 'names', 'beanstalk', 'finished',
+                 'progress')
+
     def __init__(self, options):
+        self.finished = 0
         self._setup_options(options)
         self._setup_progress(options)
         self._setup_beanstalk(options)
-        if not self.channel:
+        if not options.beanstalk:
             LOG.info("%d file names, %d domains", len(self.names), len(self.domains))
         else:
-            LOG.info("%d file names, attached to C&C channel", len(self.names))
+            LOG.info("%d file names, attached to beanstalk C&C channel", len(self.names))
 
     def valid(self):
-        return len(self.domains) or self.channel
+        return len(self.domains) or self.beanstalk
 
     def _setup_options(self, options):
         self.options = options
@@ -193,10 +232,10 @@ class HTTPHose(object):
         self.names = [X for X in self._load_names(options.names)]
 
     def _setup_beanstalk(self, options):
-        if options.beanstalk is None:
-            self.channel = None
-            return
-        self.channel = BeanstalkChannel(options)
+        if options.beanstalk:
+            self.beanstalk = BeanstalkChannel(options)
+        else:
+            self.beanstalk = None
 
     def _setup_progress(self, options):
         if options.progress:
@@ -210,7 +249,6 @@ class HTTPHose(object):
                 ])
         else:
             self.progress = None
-        self.finished = 0
 
     def _load_names(self, names_file):
         for name in names_file:
@@ -260,6 +298,8 @@ class HTTPHose(object):
             print(json_status)
         if self.options.output:
             self.options.output.write(json_status + "\n")
+        if self.beanstalk:
+            self.beanstalk.put(status)
 
     def on_finish(self):
         if self.progress:
@@ -270,16 +310,22 @@ class HTTPHose(object):
         self.finished += 1
 
     def run(self):
-        generator = WorkGenerator(self)
+        if self.beanstalk:
+            generator = self.beanstalk.get_workgenerator(self)
+        else:
+            generator = ListWorkGenerator(self)
+
         pool = gevent.pool.Pool(self.options.concurrency)
         self.finished = 0
         if self.progress:
             self.progress.start(generator.total)
+
         try:
-            for worker in generator.all():
+            for worker in generator.getall():
                 pool.add(gevent.spawn(worker.run))
         except KeyboardInterrupt:
             print("Ctrl+C caught... stopping")
+
         pool.join()
         if self.progress:
             self.progress.finish()
