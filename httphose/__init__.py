@@ -95,15 +95,17 @@ def _connect_beanstalk(host):
 
 
 class BeanstalkChannel(object):
-    __slots__ = ('beanstalk', 'lock')
+    __slots__ = ('beanstalk_read', 'beanstalk_write', 'rdlock', 'wrlock')
 
     def __init__(self, options):
         if not options.beanstalk:
             raise RuntimeError("Not enough info to create beanstalk channel!")
-        self.beanstalk = _connect_beanstalk(options.beanstalk)
-        self.beanstalk.use(options.tube_resp)
-        self.beanstalk.watch(options.tube_fetch)
-        self.lock = Semaphore()
+        self.beanstalk_read = _connect_beanstalk(options.beanstalk)
+        self.beanstalk_read.watch(options.tube_fetch)
+        self.beanstalk_write = _connect_beanstalk(options.beanstalk)
+        self.beanstalk_write.use(options.tube_resp)
+        self.rdlock = Semaphore()
+        self.wrlock = Semaphore()
         LOG.info("Connected to beanstalk @ %r - fetch: %r - resp: %r",
                  options.beanstalk, options.tube_fetch, options.tube_resp)
 
@@ -111,21 +113,23 @@ class BeanstalkChannel(object):
         return ChannelWorkGenerator(hose, self)
 
     def put(self, data):
-        with self.lock:
-            return self.beanstalk.put(data)
+        with self.wrlock:
+            return self.beanstalk_write.put(json.dumps(data))
 
     def bury(self, job):
-        with self.lock:
-            job.bury()
+        with self.rdlock:
+            return job.bury()
 
     def delete(self, job):
-        with self.lock:
+        with self.rdlock:
             job.delete()
 
     def get(self):
         while True:
-            with self.lock:
-                job = self.beanstalk.reserve()
+            with self.rdlock:
+                job = self.beanstalk_read.reserve(timeout=1)
+            if job is None:
+                continue
             try:
                 # One or more rows can exist in the job
                 for data in job.body.split("\n"):
@@ -170,13 +174,15 @@ class BeanstalkChannel(object):
 
 
 class ChannelWorkGenerator(object):
-    __slots__ = ('hose', 'names', 'channel', 'total')
+    __slots__ = ('hose', 'channel')
 
     def __init__(self, hose, channel):
         self.hose = hose
-        self.names = self.hose.names
         self.channel = channel
-        self.total = None
+
+    @property
+    def total(self):
+        return None
 
     def getall(self):
         """Fetch batches of jobs from beanstalk"""
@@ -184,13 +190,12 @@ class ChannelWorkGenerator(object):
             LOG.info("Processing job: %r", job.jid)
             try:
                 for domain in domain_list:
-                    yield Worker(self.hose, domain, self.names, extra)
+                    yield Worker(self.hose, domain, self.hose.names, extra)
             except Exception:
                 LOG.exception("While generating work from job %r", job.jid)
                 self.channel.bury(job)
                 continue
             self.channel.delete(job)
-
 
 class ListWorkGenerator(object):
     __slots__ = ('hose', 'domains', 'names', 'total')
@@ -325,7 +330,7 @@ class HTTPHose(object):
                 pool.add(gevent.spawn(worker.run))
         except KeyboardInterrupt:
             print("Ctrl+C caught... stopping")
-
         pool.join()
+
         if self.progress:
             self.progress.finish()
