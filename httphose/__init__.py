@@ -218,8 +218,8 @@ class HTTPHose(object):
     def __init__(self, options):
         self.finished = 0
         self._setup_options(options)
-        self._setup_progress(options)
         self._setup_beanstalk(options)
+        self._setup_progress(options)
         if not options.beanstalk:
             LOG.info("%d file names, %d domains", len(self.names), len(self.domains))
         else:
@@ -244,14 +244,26 @@ class HTTPHose(object):
 
     def _setup_progress(self, options):
         if options.progress:
-            self.progress = progressbar.ProgressBar(
-                redirect_stdout=True,
-                redirect_stderr=True,
-                widgets=[
-                    progressbar.Percentage(),
-                    progressbar.Bar(),
-                    ' (', progressbar.ETA(), ') ',
-                ])
+            if self.beanstalk:
+                # With Beanstalk C&C we don't know how many...
+                self.progress = progressbar.ProgressBar(
+                    redirect_stdout=True,
+                    redirect_stderr=True,
+                    widgets=[
+                        'Total: ',
+                        progressbar.Counter(),
+                        ', ',
+                        progressbar.Timer()
+                    ])
+            else:
+                self.progress = progressbar.ProgressBar(
+                    redirect_stdout=True,
+                    redirect_stderr=True,
+                    widgets=[
+                        progressbar.Percentage(),
+                        progressbar.Bar(),
+                        ' (', progressbar.ETA(), ') ',
+                    ])
         else:
             self.progress = None
 
